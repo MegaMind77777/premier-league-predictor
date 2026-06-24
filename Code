@@ -1,0 +1,191 @@
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# ============================================================
+# STEP 1 — LOAD & INSPECT
+# Why: Understand what data we have before touching anything
+# ============================================================
+df = pd.read_csv("final_dataset.csv")
+
+print("Shape:", df.shape)
+print("Columns:", df.columns.tolist())
+print("Missing values:\n", df.isnull().sum())
+
+# ============================================================
+# STEP 2 — CLEAN
+# Why: Original FTR column had wrong values (NH/H)
+# We select key columns and create correct Result column
+# ============================================================
+key_columns = [
+    'Date', 'HomeTeam', 'AwayTeam',
+    'FTHG', 'FTAG',
+    'HTP', 'ATP',
+    'HTGD', 'ATGD',
+    'HTFormPts', 'ATFormPts',
+    'DiffPts', 'DiffFormPts',
+    'MW'
+]
+df = df[key_columns]
+
+# Create Result column from actual goals
+# H = Home win, A = Away win, D = Draw
+def get_result(row):
+    if row['FTHG'] > row['FTAG']:
+        return 'H'
+    elif row['FTAG'] > row['FTHG']:
+        return 'A'
+    else:
+        return 'D'
+
+df['Result'] = df.apply(get_result, axis=1)
+print("\nResult counts:")
+print(df['Result'].value_counts())
+
+# ============================================================
+# STEP 3 & 4 — EDA + VISUALIZE
+# Why: Answer business questions with numbers and charts
+# ============================================================
+
+# --- Question 1: How often does home team win? ---
+result_counts = df['Result'].value_counts()
+percentages = df['Result'].value_counts(normalize=True) * 100
+
+print(f"\nHome wins:  {percentages['H']:.1f}%")
+print(f"Away wins:  {percentages['A']:.1f}%")
+print(f"Draws:      {percentages['D']:.1f}%")
+
+fig, ax = plt.subplots(figsize=(8, 6))
+ax.bar(result_counts.index, result_counts.values,
+       color=['steelblue', 'tomato', 'gray'])
+ax.set_title("Premier League Results 2001-2022", fontsize=16)
+ax.set_xlabel("Result (H=Home Win, A=Away Win, D=Draw)")
+ax.set_ylabel("Number of Matches")
+for i, v in enumerate(result_counts.values):
+    ax.text(i, v + 20, str(v), ha='center', fontweight='bold')
+plt.tight_layout()
+plt.show()
+# INSIGHT: Home teams win 46% of matches — home advantage is real
+
+# --- Question 2: Does form predict results? ---
+form_by_result = df.groupby('Result')['HTFormPts'].mean()
+print("\nAverage Form Points by Result:")
+print(form_by_result)
+
+fig, ax = plt.subplots(figsize=(8, 6))
+ax.bar(form_by_result.index, form_by_result.values,
+       color=['steelblue', 'tomato', 'gray'])
+ax.set_title("Average Home Team Form Points by Result", fontsize=16)
+ax.set_xlabel("Match Result (H=Win, A=Loss, D=Draw)")
+ax.set_ylabel("Average Form Points (out of 15)")
+for i, v in enumerate(form_by_result.values):
+    ax.text(i, v + 0.2, f"{v:.2f}", ha='center', fontweight='bold')
+plt.tight_layout()
+plt.show()
+# INSIGHT: Winners average 6.90 form points vs 5.43 for losers — 27% difference
+
+# --- Question 3: Does points difference predict results? ---
+fig, ax = plt.subplots(figsize=(10, 6))
+for result, color, label in zip(['H', 'D', 'A'],
+                                  ['steelblue', 'gray', 'tomato'],
+                                  ['Home Win', 'Draw', 'Away Win']):
+    subset = df[df['Result'] == result]['DiffPts']
+    ax.hist(subset, bins=30, alpha=0.6, color=color, label=label)
+ax.set_title("Points Difference Distribution by Result", fontsize=16)
+ax.set_xlabel("Points Difference (Home - Away)")
+ax.set_ylabel("Number of Matches")
+ax.legend()
+ax.axvline(x=0, color='black', linestyle='--', linewidth=1)
+plt.tight_layout()
+plt.show()
+# INSIGHT: Home teams with more points win more often
+# Upsets happen but stronger teams win majority of the time
+
+# --- Question 4: Which teams score most at home? ---
+home_goals = df.groupby('HomeTeam')['FTHG'].sum()
+top_scorers = home_goals.sort_values(ascending=False).head(10)
+
+fig, ax = plt.subplots(figsize=(12, 6))
+ax.bar(top_scorers.index, top_scorers.values, color='steelblue')
+ax.set_title("Top 10 Home Goal Scorers 2001-2022", fontsize=16)
+ax.set_xlabel("Team")
+ax.set_ylabel("Total Home Goals")
+for i, v in enumerate(top_scorers.values):
+    ax.text(i, v + 5, str(v), ha='center', fontweight='bold')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+# INSIGHT: Man United and Chelsea historically highest home scorers
+
+# ============================================================
+# STEP 5 — BUILD THE MODEL
+# Why: Use machine learning to predict match results
+# Random Forest chosen — handles multiple features well
+# and works great for classification problems
+# ============================================================
+X = df[['HTP', 'ATP', 'HTFormPts', 'ATFormPts',
+        'HTGD', 'ATGD', 'DiffPts', 'DiffFormPts']]
+y = df['Result']
+
+# Split 80% train, 20% test
+# Why: Model must be tested on data it has never seen
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42)
+
+# Train
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# Predict
+predictions = model.predict(X_test)
+
+# Evaluate
+accuracy = accuracy_score(y_test, predictions)
+print(f"\nModel Accuracy: {accuracy:.1%}")
+print("\nClassification Report:")
+print(classification_report(y_test, predictions))
+
+# ============================================================
+# STEP 6 — CONFUSION MATRIX
+# Why: Shows exactly where model gets confused
+# ============================================================
+cm = confusion_matrix(y_test, predictions, labels=['H', 'D', 'A'])
+
+fig, ax = plt.subplots(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['Home Win', 'Draw', 'Away Win'],
+            yticklabels=['Home Win', 'Draw', 'Away Win'])
+ax.set_title("Confusion Matrix — Match Result Prediction", fontsize=16)
+ax.set_xlabel("Predicted")
+ax.set_ylabel("Actual")
+plt.tight_layout()
+plt.show()
+# INSIGHT: Home wins predicted most accurately
+# Draws hardest to predict — true across all football analytics
+
+# ============================================================
+# STEP 7 — CONCLUSION
+# ============================================================
+print("""
+PROJECT CONCLUSIONS
+===================
+Question: Can we predict Premier League match results?
+
+Key Findings:
+1. Home advantage is real — home teams win 46% of matches
+2. Form is a strong predictor — winners average 6.90 vs 5.43 form points
+3. Points difference matters — stronger teams win more but upsets happen
+4. Man United and Chelsea are highest home scorers over 20 years
+
+Model Performance:
+- Random Forest predicts match results with above accuracy
+- Home wins predicted most accurately
+- Draws hardest to predict — consistent with football analytics research
+
+Tools Used: Python, Pandas, Matplotlib, Seaborn, Scikit-learn
+Data: Premier League 2001-2022 (6840 matches)
+""")
